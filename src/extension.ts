@@ -72,7 +72,6 @@ import {
     integer,
 } from "vscode-languageclient/node";
 import { registerCommentsProvider } from "./commentsProvider";
-import { registerChatProvider } from "./providers/chat/customChatWebviewProvider";
 import { registerCommentsWebviewProvider } from "./providers/commentsWebview/customCommentsWebviewProvider";
 import { registerParallelViewWebviewProvider } from "./providers/parallelPassagesWebview/customParallelPassagesWebviewProvider";
 import { registerDictionaryTableProvider } from "./providers/dictionaryTable/dictionaryTableProvider";
@@ -88,7 +87,6 @@ import {
     sync,
 } from "./providers/scm/git";
 import { TranslationNotesProvider } from "./providers/translationNotes/TranslationNotesProvider";
-import { registerScriptureViewerProvider } from "./providers/scriptureView/ScriptureViewerPanel";
 import { registerScmStatusBar } from "./providers/scm/statusBar";
 import { getNonce } from "./providers/obs/utilities";
 import { MessageType } from "./providers/obs/CreateProject/types";
@@ -99,9 +97,6 @@ const ROOT_PATH = getWorkSpaceFolder();
 
 const PATHS_TO_POPULATE = [
     // "metadata.json", // This is where we store the project metadata in scripture burrito format, but we create this using the project initialization command
-    { filePath: "comments.json", defaultContent: "" }, // This is where we store the VS Code comments api comments, such as on .bible files
-    { filePath: "notebook-comments.json", defaultContent: "[]" }, // We can't use the VS Code comments api for notebooks (.codex files), so a second files avoids overwriting conflicts
-    { filePath: "chat-threads.json", defaultContent: "[]" }, // This is where chat thread conversations are saved
     { filePath: "drafts/" }, // This is where we store the project drafts, including project.dictionary and embedding dbs
     { filePath: "drafts/target/" }, // This is where we store the drafted scripture in particular as .codex files
     { filePath: "drafts/project.dictionary", defaultContent: "" }, // This is where we store the project dictionary
@@ -171,31 +166,33 @@ export async function activate(context: vscode.ExtensionContext) {
     // Add .bible files to the files.readonlyInclude glob pattern to make them readonly without overriding existing patterns
     const config = vscode.workspace.getConfiguration();
 
-    // config.update(
-    //     "editor.wordWrap",
-    //     "on",
-    //     vscode.ConfigurationTarget.Workspace,
-    // );
-    // // Turn off line numbers by default in workspace
-    // config.update(
-    //     "editor.lineNumbers",
-    //     "off",
-    //     vscode.ConfigurationTarget.Workspace,
-    // );
-    // // Set to serif font by default in workspace
-    // config.update(
-    //     "editor.fontFamily",
-    //     "serif",
-    //     vscode.ConfigurationTarget.Workspace,
-    // );
-    // // Set to 16px font size by default in workspace
-    // config.update("editor.fontSize", 16, vscode.ConfigurationTarget.Workspace);
-    // // Set cursor style to line-thin by default in workspace
-    // config.update(
-    //     "editor.cursorStyle",
-    //     "line-thin",
-    //     vscode.ConfigurationTarget.Workspace,
-    // );
+    config.update(
+        "editor.wordWrap",
+        "on",
+        vscode.ConfigurationTarget.Workspace,
+    );
+    // Turn off line numbers by default in workspace
+    config.update(
+        "editor.lineNumbers",
+        "off",
+        vscode.ConfigurationTarget.Workspace,
+    );
+    // Set to serif font by default in workspace
+
+    const fallbackFont = "serif";
+    config.update(
+        "editor.fontFamily",
+        fallbackFont,
+        vscode.ConfigurationTarget.Workspace,
+    );
+    // Set to 16px font size by default in workspace
+    config.update("editor.fontSize", 16, vscode.ConfigurationTarget.Workspace);
+    // Set cursor style to line-thin by default in workspace
+    config.update(
+        "editor.cursorStyle",
+        "line-thin",
+        vscode.ConfigurationTarget.Workspace,
+    );
     // TODO: set up the layout for the workspace
     // FIXME: this way of doing things clobbers the users existing settings.
     // These settings should probably be bundled in the app only, and not applied via the extension.
@@ -573,8 +570,66 @@ export async function activate(context: vscode.ExtensionContext) {
                 await vscode.commands.executeCommand(
                     "scripture-explorer-activity-bar.refreshEntry",
                 );
+                await vscode.commands.executeCommand(
+                    "codex-editor.setEditorFontToTargetLanguage",
+                );
             },
         ),
+    );
+
+    vscode.commands.registerCommand(
+        "codex-editor.setEditorFontToTargetLanguage",
+        async () => {
+            const projectMetadata = await getProjectMetadata();
+            const targetLanguageCode = projectMetadata?.languages?.find(
+                (language) =>
+                    language.projectStatus === LanguageProjectStatus.TARGET,
+            )?.tag;
+            if (targetLanguageCode) {
+                const fontApiUrl = `https://lff.api.languagetechnology.org/lang/${targetLanguageCode}`;
+                const fontApiResponse = await fetch(fontApiUrl);
+                const fontApiData = await fontApiResponse.json();
+                const defaultFontFamily = fontApiData.defaultfamily[0];
+                const fontFile =
+                    fontApiData.families[defaultFontFamily].defaults.ttf;
+                const fontFileRemoteUrl =
+                    fontApiData.families[defaultFontFamily].files[fontFile].url;
+                const workspaceRoot =
+                    vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+                if (workspaceRoot) {
+                    const fontFilePath = path.join(
+                        workspaceRoot,
+                        ".project",
+                        "fonts",
+                        fontFile,
+                    );
+                    const fontFilePathUri = vscode.Uri.file(fontFilePath);
+                    try {
+                        await vscode.workspace.fs.stat(fontFilePathUri);
+                    } catch {
+                        const fontFileResponse = await fetch(fontFileRemoteUrl);
+                        const fontFileBuffer =
+                            await fontFileResponse.arrayBuffer();
+                        await vscode.workspace.fs.createDirectory(
+                            vscode.Uri.file(path.dirname(fontFilePath)),
+                        );
+                        await vscode.workspace.fs.writeFile(
+                            fontFilePathUri,
+                            new Uint8Array(fontFileBuffer),
+                        );
+                    }
+                }
+                const config = vscode.workspace.getConfiguration();
+                config.update(
+                    "editor.fontFamily",
+                    `${defaultFontFamily} ${fallbackFont}`,
+                    vscode.ConfigurationTarget.Workspace,
+                );
+                vscode.window.showInformationMessage(
+                    `Font set to ${defaultFontFamily} with fallback to ${fallbackFont}`,
+                );
+            }
+        },
     );
 
     // Register and create the Scripture Tree View
@@ -804,13 +859,9 @@ export async function activate(context: vscode.ExtensionContext) {
     isExtensionInitialized = true;
     registerReferencesCodeLens(context);
     registerSourceCodeLens(context);
-    registerCommentsProvider(context);
-    registerChatProvider(context);
-    registerCommentsWebviewProvider(context);
     registerParallelViewWebviewProvider(context);
     registerDictionaryTableProvider(context);
     registerDictionarySummaryProvider(context);
-    registerScriptureViewerProvider(context);
     registerTextSelectionHandler(context, () => undefined);
     context.subscriptions.push(CreateProjectProvider.register(context));
     context.subscriptions.push(ResourcesProvider.register(context));
@@ -827,6 +878,12 @@ export async function activate(context: vscode.ExtensionContext) {
         "workbench.view.extension.scripture-explorer-activity-bar",
     );
     vscode.commands.executeCommand("workbench.action.focusAuxiliaryBar");
+
+    // Try to set workspace font to target language font
+    vscode.window.showInformationMessage("Setting font to target language...");
+    vscode.commands.executeCommand(
+        "codex-editor.setEditorFontToTargetLanguage",
+    );
 
     scmInterval = setInterval(stageAndCommit, 1000 * 60 * 15);
 }
