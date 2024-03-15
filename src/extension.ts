@@ -31,7 +31,10 @@ import {
     initializeProjectMetadata,
     promptForProjectDetails,
 } from "./utils/projectUtils";
-import { checkTaskStatus, indexVrefs } from "./commands/indexVrefsCommand";
+import {
+    searchVerseRefPositionIndex,
+    indexVerseRefsInSourceText,
+} from "./commands/indexVrefsCommand";
 import {
     triggerInlineCompletion,
     provideInlineCompletionItems,
@@ -161,6 +164,7 @@ let pyglsLogger: vscode.LogOutputChannel;
 let scmInterval: any; // Webpack & typescript for vscode are having issues
 
 export async function activate(context: vscode.ExtensionContext) {
+    indexVerseRefsInSourceText();
     /** BEGIN CODEX EDITOR EXTENSION FUNCTIONALITY */
 
     // Add .bible files to the files.readonlyInclude glob pattern to make them readonly without overriding existing patterns
@@ -208,7 +212,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand(
             "codex-editor-extension.indexVrefs",
-            indexVrefs,
+            indexVerseRefsInSourceText,
         ),
     );
 
@@ -386,19 +390,14 @@ export async function activate(context: vscode.ExtensionContext) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand(
-            "codex-editor-extension.checkTaskStatus",
+            "codex-editor-extension.searchIndex",
             async () => {
-                const taskNumber = await vscode.window.showInputBox({
+                const searchString = await vscode.window.showInputBox({
                     prompt: "Enter the task number to check its status",
                     placeHolder: "Task number",
-                    validateInput: (text) => {
-                        return isNaN(parseInt(text, 10))
-                            ? "Please enter a valid number"
-                            : null;
-                    },
                 });
-                if (taskNumber !== undefined) {
-                    checkTaskStatus(parseInt(taskNumber, 10));
+                if (searchString !== undefined) {
+                    searchVerseRefPositionIndex(searchString);
                 }
             },
         ),
